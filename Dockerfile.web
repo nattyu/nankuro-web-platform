@@ -1,26 +1,26 @@
-FROM python:3.12-slim
+FROM python:3.11-slim
 
-# Install system dependencies for OpenCV and others
+# 環境変数
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+# OS依存（opencv用）
 RUN apt-get update && apt-get install -y \
-    libgl1-mesa-glx \
+    libgl1 \
     libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Copy requirements
+# 先に requirements（キャッシュ効く）
 COPY requirements.txt .
+RUN pip install --upgrade pip \
+    && pip install --no-cache-dir -r requirements.txt
 
-# Install dependencies
-# We also install fastapi, uvicorn for the web server
-RUN pip install --no-cache-dir -r requirements.txt
-RUN pip install --no-cache-dir fastapi uvicorn python-multipart
-
-# Copy the entire project
+# ソースコピー
 COPY . .
 
-# Expose the port App Runner expects (typically 8080)
+# App Runner は 8080 固定
 EXPOSE 8080
 
-# Run the FastAPI app using Uvicorn
 CMD ["uvicorn", "lambda_app.web_app:app", "--host", "0.0.0.0", "--port", "8080"]
