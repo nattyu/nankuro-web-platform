@@ -1,0 +1,26 @@
+FROM python:3.12-slim
+
+# Install system dependencies for OpenCV and others
+RUN apt-get update && apt-get install -y \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy requirements
+COPY requirements.txt .
+
+# Install dependencies
+# We also install fastapi, uvicorn for the web server
+RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir fastapi uvicorn python-multipart
+
+# Copy the entire project
+COPY . .
+
+# Expose the port App Runner expects (typically 8080)
+EXPOSE 8080
+
+# Run the FastAPI app using Uvicorn
+CMD ["uvicorn", "lambda_app.web_app:app", "--host", "0.0.0.0", "--port", "8080"]

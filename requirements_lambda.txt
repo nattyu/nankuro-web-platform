@@ -1,0 +1,11 @@
+setuptools
+wheel
+numpy
+pandas
+pillow
+ultralytics
+opencv-python-headless
+yomitoku==0.7.1
+pillow-heif
+onnx==1.17.0
+onnxruntime==1.20.1

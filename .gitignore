@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Logs / outputs
+logs/
+outputs/
+
+# Local env
+.env
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Docker
+*.log
+
+# Large ML artifacts (必要なら後でS3へ)
+# yolo_models_weights/**/last.pt
+
+# VSCode
+.vscode/

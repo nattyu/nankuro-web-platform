@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nankuro Solver AI</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+    </style>
+</head>
+
+<body class="bg-slate-900 text-white min-h-screen flex flex-col items-center justify-center p-4">
+
+    <div class="bg-slate-800 p-8 rounded-2xl shadow-2xl w-full max-w-md border border-slate-700">
+        <h1
+            class="text-3xl font-bold mb-2 text-center bg-gradient-to-r from-blue-400 to-cyan-300 bg-clip-text text-transparent">
+            Nankuro Solver AI</h1>
+        <p class="text-slate-400 text-center mb-8">AIがナンクロを一瞬で解きます</p>
+
+        <!-- Plan Simulator -->
+        <div class="mb-6 p-4 bg-slate-900 rounded-lg border border-slate-700">
+            <label class="flex items-center justify-between cursor-pointer">
+                <span class="text-sm font-medium text-slate-300">Simulator Plan</span>
+                <div class="relative">
+                    <input type="checkbox" id="planToggle" class="sr-only peer">
+                    <div
+                        class="w-11 h-6 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600">
+                    </div>
+                </div>
+            </label>
+            <div id="planStatus" class="text-xs text-right mt-1 text-slate-500">Currently: Free User</div>
+        </div>
+
+        <!-- Upload Area -->
+        <div class="mb-6">
+            <label class="block mb-2 text-sm font-medium text-slate-300">Upload Puzzle Image</label>
+            <div class="flex items-center justify-center w-full">
+                <label for="dropzone-file"
+                    class="flex flex-col items-center justify-center w-full h-40 border-2 border-slate-600 border-dashed rounded-lg cursor-pointer bg-slate-700 hover:bg-slate-600 hover:border-slate-500 transition-all">
+                    <div class="flex flex-col items-center justify-center pt-5 pb-6">
+                        <svg class="w-8 h-8 mb-4 text-slate-400" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"
+                            fill="none" viewBox="0 0 20 16">
+                            <path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M13 13h3a3 3 0 0 0 0-6h-.025A5.56 5.56 0 0 0 16 6.5 5.5 5.5 0 0 0 5.207 5.021C5.137 5.017 5.071 5 5 5a4 4 0 0 0 0 8h2.167M10 15V6m0 0L8 8m2-2 2 2" />
+                        </svg>
+                        <p class="text-sm text-slate-400"><span class="font-semibold">Click to upload</span> or drag and
+                            drop</p>
+                    </div>
+                    <input id="dropzone-file" type="file" class="hidden" accept="image/*" />
+                </label>
+            </div>
+        </div>
+
+        <button id="solveBtn"
+            class="w-full text-white bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 focus:ring-4 focus:outline-none focus:ring-blue-800 font-medium rounded-lg text-sm px-5 py-3 text-center transition-all shadow-lg shadow-blue-500/30">
+            Start Solving
+        </button>
+    </div>
+
+    <script>
+        const planToggle = document.getElementById('planToggle');
+        const planStatus = document.getElementById('planStatus');
+        const solveBtn = document.getElementById('solveBtn');
+        const dropzoneAuth = document.getElementById('dropzone-file');
+
+        // Config - Update this with your actual API ID
+        // Config - Update this with your actual API ID
+        // Switched to Function URL for longer timeout support (15 mins)
+        // Switched to relative path for Web App compatibility
+        const API_BASE = ""; // Relative path
+        const OCR_URL = `${API_BASE}/api/ocr`;
+
+        // Plan Toggle Logic
+        planToggle.addEventListener('change', (e) => {
+            const isPaid = e.target.checked;
+            planStatus.innerText = isPaid ? "Currently: Paid User" : "Currently: Free User";
+            localStorage.setItem('nankuro_plan', isPaid ? 'paid' : 'free');
+        });
+
+        // Initialize state
+        localStorage.setItem('nankuro_plan', 'free');
+
+        // File Selection Logic (Visual Feedback)
+        dropzoneAuth.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                const fileName = e.target.files[0].name;
+                document.querySelector('label[for="dropzone-file"] p').innerHTML = `<span class="font-semibold text-blue-400">Selected:</span> ${fileName}`;
+            }
+        });
+
+        // Solve Button Logic
+        solveBtn.addEventListener('click', async () => {
+            const fileInput = document.getElementById('dropzone-file');
+            const file = fileInput.files[0];
+
+            if (!file) {
+                alert("Please select an image first.");
+                return;
+            }
+
+            // UI Feedback
+            solveBtn.disabled = true;
+            solveBtn.innerHTML = `<svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-white inline" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Processing...`;
+
+            try {
+                // 1. Convert Image to Base64 (Lambda needs base64 usually, or binary via multipart. 
+                // Let's assume the API expects { "image_data": "base64..." } or multipart.
+                // Checking lambda_handler.py: it looks for "body" which might be base64 encoded if isBase64Encoded is true.
+                // Standard API Gateway binary support can be tricky.
+                // Let's try sending as JSON with base64 for stability if the lambda expects body.
+                // Let's check lambda_handler.py... it parses body directly. 
+                // Wait, lambda_handler.py handles `event.get("body")`.
+
+                // Let's implement Base64 encoding based on assumed Lambda compatibility
+                // Client-side resizing to prevent 413 Payload Too Large
+                const reader = new FileReader();
+                reader.onload = function (readerEvent) {
+                    const tempImg = new Image();
+                    tempImg.onload = async function () {
+                        const MAX_SIZE = 1200; // Resize to max 1200px
+                        let width = tempImg.width;
+                        let height = tempImg.height;
+
+                        if (width > height) {
+                            if (width > MAX_SIZE) {
+                                height *= MAX_SIZE / width;
+                                width = MAX_SIZE;
+                            }
+                        } else {
+                            if (height > MAX_SIZE) {
+                                width *= MAX_SIZE / height;
+                                height = MAX_SIZE;
+                            }
+                        }
+
+                        const canvas = document.createElement('canvas');
+                        canvas.width = width;
+                        canvas.height = height;
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(tempImg, 0, 0, width, height);
+
+                        // Compress to JPEG 0.7
+                        const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+                        const base64data = dataUrl.split(',')[1];
+
+                        try {
+                            const response = await fetch(OCR_URL, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                    image_data: base64data,
+                                    filename: file.name
+                                })
+                            });
+
+                            if (!response.ok) {
+                                throw new Error(`OCR Failed: ${response.status}`);
+                            }
+
+                            const data = await response.json();
+
+                            localStorage.setItem('nankuro_board', JSON.stringify(data.board));
+                            localStorage.setItem('nankuro_puzzle_id', data.puzzle_id || 'unknown');
+                            window.location.href = 'result_solve.html';
+
+                        } catch (error) {
+                            console.error(error);
+                            alert("Error: " + error.message);
+                            solveBtn.disabled = false;
+                            solveBtn.innerText = "Start Solving";
+                        }
+                    };
+                    tempImg.src = readerEvent.target.result;
+                };
+                reader.readAsDataURL(file);
+
+            } catch (e) {
+                console.error(e);
+                alert("An error occurred.");
+                solveBtn.disabled = false;
+                solveBtn.innerText = "Start Solving";
+            }
+        });
+    </script>
+</body>
+
+</html>

@@ -1,0 +1,79 @@
+# Git configuration
+.git
+.gitignore
+
+# Python virtual environments
+venv/
+.venv/
+.venv_nankuro/
+env/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Logs and temporary files
+logs/
+output_logs/logs/
+solver_log/
+*.log
+
+# Test data & unrelated large files
+# Test data & unrelated large files
+test_image/
+backup/
+_archive/
+answers/
+outputs/
+test_images/
+
+# Exclude junk files in custom_yolo folders to save space
+# But KEEP the folder structure so we can include best.pt
+custom_yolo_*/**/*.png
+custom_yolo_*/**/*.jpg
+custom_yolo_*/**/*.jpeg
+custom_yolo_*/**/*.csv
+custom_yolo_*/**/*.yaml
+custom_yolo_*/**/last.pt
+custom_yolo_*/**/args.yaml
+custom_yolo_*/**/labels.jpg
+custom_yolo_*/**/train_batch*
+custom_yolo_*/**/val_batch*
+custom_yolo_*/**/confusion_matrix*
+custom_yolo_*/**/results*
+custom_yolo_*/**/Mask*
+custom_yolo_*/**/Box*
+custom_yolo_*/**/events.out.tfevents*
+
+# Exclude unused runs (Detect/Train folders)
+# Number: Exclude all, then un-ignore 13
+custom_yolo_number_1/number_detection*
+!custom_yolo_number_1/number_detection13/
+
+# Kanji: Exclude all, then un-ignore 6
+custom_yolo_kanji_1/kanji_detection*
+!custom_yolo_kanji_1/kanji_detection6/
+
+# Segment: Exclude all, then un-ignore 4
+custom_yolo_segment/train*
+!custom_yolo_segment/train4/
+
+# Kanji Black: Exclude all? (There was only 1 run, so keep it)
+# custom_yolo_kanji_black_cell/kanji_black_cell_detection/
+
+# Artifacts & Plans
+plans/
+brain/
+nankuro_solver_plan.md
+task.md
+implementation_plan.md
+walkthrough.md
+DEPLOY_GUIDE.md
+
+# OS specific
+.DS_Store
+Thumbs.db
+
+# CDK
+**/cdk.out
+**/cdk.context.json
