@@ -22,7 +22,7 @@ Thumbs.db
 *.log
 
 # Large ML artifacts (必要なら後でS3へ)
-# yolo_models_weights/**/last.pt
+yolo_models_weights/**/last.pt
 
 # VSCode
 .vscode/

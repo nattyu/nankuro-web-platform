@@ -6,15 +6,46 @@ import random
 import base64
 import logging
 from typing import Optional, Dict, Any, List
-from fastapi import FastAPI, HTTPException, Request, UploadFile, File
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+import uuid
+from datetime import datetime
+
+import boto3
+from botocore.config import Config as BotoConfig
+from botocore.exceptions import ClientError
+
+
 # --- Configuration & Logging ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("nankuro_web")
+
+# --- S3 Configuration ---
+AWS_REGION = os.getenv("AWS_REGION", os.getenv("AWS_DEFAULT_REGION", "ap-northeast-1"))
+S3_BUCKET = os.getenv("S3_BUCKET")  # 必須（App Runnerの環境変数で設定）
+S3_PREFIX = os.getenv("S3_PREFIX", "uploads/")
+
+_s3_client = None
+
+def get_s3_client():
+    global _s3_client
+    if _s3_client is None:
+        _s3_client = boto3.client(
+            "s3",
+            region_name=AWS_REGION,
+            config=BotoConfig(signature_version="s3v4"),
+        )
+    return _s3_client
+
+def s3_download_bytes(bucket: str, key: str) -> bytes:
+    s3 = get_s3_client()
+    obj = s3.get_object(Bucket=bucket, Key=key)
+    return obj["Body"].read()
+
 
 # --- Path Setup ---
 # Add project root to sys.path to allow imports from solver_core, utils, etc.
@@ -106,7 +137,7 @@ _MODELS_CACHE = None
 
 def run_ocr(img_bytes):
     logger.info("Starting run_ocr...")
-    import cv2
+    import cv2 # type: ignore
     import numpy as np
     
     # Lazy load custom modules
@@ -159,8 +190,8 @@ def run_ocr(img_bytes):
     rec_kan_m, rec_kan_c = cache['rec_kanji']
     
     final_detected, _ = detection.process_detections_y1(
-        img, results_num, results_kji,
-        rec_num_m, rec_num_c, rec_kan_m, rec_kan_c,
+        img, img, results_num, results_kji,
+        num_model=rec_num_m, num_cls=rec_num_c, kan_model=rec_kan_m, kan_cls=rec_kan_c,
         font=None, names_num=names_num, names_kji=names_kji,
         profile=False, draw=False
     )
@@ -190,50 +221,109 @@ class OcrRequest(BaseModel):
 class SolveRequest(BaseModel):
     board: List[List[Any]]
 
+class PresignRequest(BaseModel):
+    filename: str
+    content_type: str = "image/jpeg"
+
+class PresignResponse(BaseModel):
+    upload_url: str
+    s3_key: str
+    expires_in: int
+
+class OCRRequest(BaseModel):
+    # 推奨：S3直PUTしたオブジェクトキー
+    s3_key: Optional[str] = None
+
+    # 互換用（古いフロントが base64 を送る場合）
+    image_data: Optional[str] = None
+
+class HealthResponse(BaseModel):
+    ok: bool
+
+@app.get("/health", response_model=HealthResponse)
+async def health():
+    return {"ok": True}
+
+@app.post("/presign", response_model=PresignResponse)
+async def presign(req: PresignRequest):
+    if not S3_BUCKET:
+        raise HTTPException(status_code=500, detail="S3_BUCKET env var is not set")
+
+    # 拡張子は filename から推定（無くてもOK）
+    ext = os.path.splitext(req.filename)[1].lower() or ".jpg"
+    # 例: uploads/2025/12/13/<uuid>.jpg
+    date_path = datetime.utcnow().strftime("%Y/%m/%d")
+    key = f"{S3_PREFIX}{date_path}/{uuid.uuid4().hex}{ext}"
+
+    s3 = get_s3_client()
+    try:
+        upload_url = s3.generate_presigned_url(
+            ClientMethod="put_object",
+            Params={
+                "Bucket": S3_BUCKET,
+                "Key": key,
+                "ContentType": req.content_type,
+            },
+            ExpiresIn=600,  # 10分
+        )
+        return {"upload_url": upload_url, "s3_key": key, "expires_in": 600}
+    except ClientError as e:
+        logger.error("Presign error", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # --- API Endpoints ---
 
 @app.post("/api/ocr")
-async def api_ocr(request: Request):
+async def api_ocr(req: OCRRequest):
     try:
-        # Handle both JSON with base64 and raw body if needed, but sticking to JSON for Web
-        # The frontend sends { image_data: "base64..." }
-        data = await request.json()
-        image_data = data.get("image_data")
-        
-        if not image_data:
-            raise HTTPException(status_code=400, detail="No image_data provided")
-            
-        img_bytes = base64.b64decode(image_data)
+        # 1) s3_key が来たら S3 から取る（推奨）
+        if req.s3_key:
+            if not S3_BUCKET:
+                raise HTTPException(status_code=500, detail="S3_BUCKET env var is not set")
+            img_bytes = s3_download_bytes(S3_BUCKET, req.s3_key)
+
+        # 2) 互換：base64 が来たら decode（ただし大きい画像で413になりやすい）
+        elif req.image_data:
+            img_bytes = base64.b64decode(req.image_data)
+
+        else:
+            raise HTTPException(status_code=400, detail="Provide either s3_key or image_data")
+
         board_df, meta = run_ocr(img_bytes)
-        
+
         return {
             "status": "ok",
             "board": df_to_board(board_df),
             "meta": meta
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"OCR Error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.post("/api/solve")
-async def api_solve(request: SolveRequest):
+async def api_solve(request: SolveRequest, req: Request):
     try:
-        # Mock User Context for Web (Simulate standard user or check headers if Auth implemented)
-        # For simplicity in this demo, we assume "web_user" and "paid" (or "free")
-        # In a real app, you'd check Authorization header.
         user_id = "web_user"
-        plan = "paid" # Unlock full features for the Web App deployment
-        
+
+        # まずはヘッダ優先、無ければ env、最後に paid
+        # 例: X-Plan: free / paid
+        plan = req.headers.get("X-Plan") or os.getenv("DEFAULT_PLAN", "paid")
+
         solve_nankuro = get_solver_core()
         board_df = board_json_to_df(request.board)
-        
+
         raw_result = solve_nankuro(board_df, user_id)
         result = apply_plan_restrictions(raw_result, plan, user_id)
-        
+
         return result
     except Exception as e:
         logger.error(f"Solve Error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
 
 # Match frontend/main.html logic where it redirects to result_solve.html
 # We serve the frontend directory as static files.
