@@ -9,36 +9,17 @@ build:
 
 run:
   env:
-    # --- Python依存を /app/vendor から読む ---
     - name: PYTHONPATH
       value: /app/vendor
 
-    # --- S3 Presign / OCR 用 ---
+    # 追加（これだけでOK）
     - name: S3_BUCKET
-      value: nankuro-uploads-prod   # ← あなたのバケット名に置き換え
+      value: nankuro-uploads-prod   # ←ここはあなたの実バケット名
     - name: AWS_REGION
       value: ap-northeast-1
     - name: S3_PREFIX
       value: uploads/
 
-    # --- 安定動作用（YOLO / matplotlib） ---
-    - name: HOME
-      value: /tmp
-    - name: MPLCONFIGDIR
-      value: /tmp
-    - name: YOLO_CONFIG_DIR
-      value: /tmp
-    - name: ULTRALYTICS_NO_AUTOINSTALL
-      value: "True"
-    - name: YOLO_VERBOSE
-      value: "False"
-
-  command: >
-    python3 -m hypercorn lambda_app.web_app:app
-    --bind 0.0.0.0:8080
-    --log-level debug
-    --access-logfile -
-    --error-logfile -
-
+  command: python3 -m hypercorn lambda_app.web_app:app --bind 0.0.0.0:8080 --log-level debug --access-logfile - --error-logfile -
   network:
     port: 8080
