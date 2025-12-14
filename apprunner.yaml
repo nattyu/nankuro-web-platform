@@ -1,0 +1,14 @@
+version: 1.0
+runtime: python311
+
+build:
+  commands:
+    build:
+      - echo "build stage"
+
+run:
+  pre-run:
+    - pip3 install -r requirements.txt
+  command: python3 -m hypercorn lambda_app.web_app:app --bind 0.0.0.0:8080
+  network:
+    port: 8080
