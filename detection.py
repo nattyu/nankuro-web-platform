@@ -18,6 +18,30 @@ from utils.drawing_utils import draw_box_with_text
 from utils.file_utils import get_timestamp
 
 
+# ============================================================
+# ★ 追加：transform_image() の出力整形
+# transform_image() は (1,C,H,W) を返すため、stack 前に (C,H,W) に揃える
+# ============================================================
+def _ensure_chw(t: torch.Tensor, *, context: str = "") -> torch.Tensor:
+    """
+    期待:
+      - (1,C,H,W) または (C,H,W)
+    返す:
+      - (C,H,W)
+    """
+    if not isinstance(t, torch.Tensor):
+        raise TypeError(f"Expected torch.Tensor but got {type(t)} {context}")
+
+    # (1,C,H,W) -> (C,H,W)
+    if t.dim() == 4 and t.size(0) == 1:
+        t = t.squeeze(0)
+
+    if t.dim() != 3:
+        raise ValueError(f"Invalid tensor shape (expected CHW): {tuple(t.shape)} {context}")
+
+    return t
+
+
 # YOLO結果取得
 def gather_raw_boxes(results, names):
     """
@@ -78,13 +102,13 @@ def process_filtered_boxes(
     detected_characters = []
 
     t0 = time.perf_counter()
-    
+
     # バッチ処理用リスト
     kanji_crops = []
     kanji_meta = []  # (x1, y1, x2, y2, conf, cname)
     number_crops = []
     number_meta = []
-    
+
     count_black = 0
 
     for (x1, y1, x2, y2, conf, cname) in filtered_boxes:
@@ -92,29 +116,32 @@ def process_filtered_boxes(
             detected_characters.append((x1, y1, x2, y2, "■", conf, cname))
             count_black += 1
             continue
-            
+
         cropped_region = image[y1:y2, x1:x2]
-        if cropped_region.size == 0: continue
-        
+        if cropped_region.size == 0:
+            continue
+
         gray_region = cv2.cvtColor(cropped_region, cv2.COLOR_BGR2GRAY)
         pil_img = Image.fromarray(gray_region).convert("L")
 
         if cname == "kanji":
             tensor = transform_image(pil_img, size=128)
+            tensor = _ensure_chw(tensor, context="kanji")  # ★追加
             kanji_crops.append(tensor)
             kanji_meta.append((x1, y1, x2, y2, conf, cname))
         elif cname == "number":
             tensor = transform_image(pil_img, size=32)
+            tensor = _ensure_chw(tensor, context="number")  # ★追加
             number_crops.append(tensor)
             number_meta.append((x1, y1, x2, y2, conf, cname))
 
     # Kanji Batch Inference
     if kanji_crops:
-        batch = torch.stack(kanji_crops)
+        batch = torch.stack(kanji_crops)  # (B, C, H, W) になる
         with torch.no_grad():
             out = kanji_model(batch)
             _, preds = torch.max(out, 1)
-        
+
         for i, pred_idx in enumerate(preds):
             char = kanji_classes[pred_idx.item()]
             x1, y1, x2, y2, conf, cname = kanji_meta[i]
@@ -122,11 +149,11 @@ def process_filtered_boxes(
 
     # Number Batch Inference
     if number_crops:
-        batch = torch.stack(number_crops)
+        batch = torch.stack(number_crops)  # (B, C, H, W) になる
         with torch.no_grad():
             out = number_model(batch)
             _, preds = torch.max(out, 1)
-            
+
         for i, pred_idx in enumerate(preds):
             char = number_classes[pred_idx.item()]
             x1, y1, x2, y2, conf, cname = number_meta[i]
@@ -146,8 +173,6 @@ def process_filtered_boxes(
 
     return detected_characters
 
-
-import numpy as np
 
 # １）行グループ化：行の「中心Y」と「行高さ」の中央値を使ってクラスタリング
 def group_rows(detected, center_thresh_ratio=0.25):
