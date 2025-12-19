@@ -61,6 +61,8 @@
             class="w-full text-white bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 focus:ring-4 focus:outline-none focus:ring-blue-800 font-medium rounded-lg text-sm px-5 py-3 text-center transition-all shadow-lg shadow-blue-500/30">
             Start Solving
         </button>
+        <p id="limitMsg" class="mt-3 text-sm text-yellow-300 hidden"></p>
+
     </div>
 
     <script>
@@ -73,18 +75,64 @@
         // Config - Update this with your actual API ID
         // Switched to Function URL for longer timeout support (15 mins)
         // Switched to relative path for Web App compatibility
-        const API_BASE = ""; // Relative path
+        const API_BASE = "https://api.nankuro-assist.com"; // Relative path
         const OCR_URL = `${API_BASE}/api/ocr`;
+
+        function todayJST() {
+            // JSTの日付文字列（YYYY-MM-DD）
+            const now = new Date();
+            // 端末が日本前提ならこれでOK。厳密化するならサーバ返却に寄せる。
+            const y = now.getFullYear();
+            const m = String(now.getMonth() + 1).padStart(2, '0');
+            const d = String(now.getDate()).padStart(2, '0');
+            return `${y}-${m}-${d}`;
+        }
+
+        function applySolveLimitUI() {
+            const plan = localStorage.getItem('nankuro_plan') || 'free';
+            const limitDay = localStorage.getItem('nankuro_solve_blocked_day'); // 例: "2025-12-19"
+            const msg = document.getElementById('limitMsg');
+
+            // paid なら常に解除
+            if (plan === 'paid') {
+                solveBtn.disabled = false;
+                solveBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+                if (msg) { msg.classList.add('hidden'); msg.textContent = ""; }
+                return;
+            }
+
+            // free で、今日ブロックなら無効化
+            if (limitDay && limitDay === todayJST()) {
+                solveBtn.disabled = true;
+                solveBtn.classList.add('opacity-50', 'cursor-not-allowed');
+                if (msg) {
+                msg.classList.remove('hidden');
+                msg.textContent = "本日の無料利用回数（5回）に達しました。明日またお試しください。";
+                }
+            } else {
+                solveBtn.disabled = false;
+                solveBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+                if (msg) { msg.classList.add('hidden'); msg.textContent = ""; }
+            }
+        }
+
 
         // Plan Toggle Logic
         planToggle.addEventListener('change', (e) => {
             const isPaid = e.target.checked;
             planStatus.innerText = isPaid ? "Currently: Paid User" : "Currently: Free User";
             localStorage.setItem('nankuro_plan', isPaid ? 'paid' : 'free');
+            applySolveLimitUI();
+            solveBtn.innerText = "Start Solving";
         });
 
         // Initialize state
-        localStorage.setItem('nankuro_plan', 'free');
+        // localStorage.setItem('nankuro_plan', 'free');
+        // Initialize plan from storage (default: free)
+        const savedPlan = localStorage.getItem('nankuro_plan') || 'free';
+        planToggle.checked = (savedPlan === 'paid');
+        planStatus.innerText = planToggle.checked ? "Currently: Paid User" : "Currently: Free User";
+
 
         // File Selection Logic (Visual Feedback)
         dropzoneAuth.addEventListener('change', (e) => {
@@ -98,6 +146,11 @@
         solveBtn.addEventListener('click', async () => {
             const fileInput = document.getElementById('dropzone-file');
             const file = fileInput.files[0];
+
+            // 1日上限に達しているなら何もしない
+            if (solveBtn.disabled) {
+            return;
+            }
 
             if (!file) {
                 alert("Please select an image first.");
@@ -187,6 +240,10 @@
                 solveBtn.innerText = "Start Solving";
             }
         });
+
+        applySolveLimitUI();
+        solveBtn.innerText = "Start Solving";
+
     </script>
 </body>
 

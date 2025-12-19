@@ -60,6 +60,26 @@
         .cell:hover .conf {
             display: block;
         }
+
+        .mapping-card {
+            background: #1e293b;
+            border: 1px solid #334155;
+            border-radius: 8px;
+            text-align: center;
+            padding: 4px;
+            }
+
+            .mapping-num {
+            font-size: 12px;
+            color: #94a3b8;
+            height: 20%;
+            }
+
+            .mapping-kanji {
+            font-size: 22px;
+            font-weight: bold;
+            height: 80%;
+            }
     </style>
 </head>
 
@@ -69,6 +89,10 @@
         <h1 class="text-2xl font-bold bg-gradient-to-r from-blue-400 to-cyan-300 bg-clip-text text-transparent">Solution
         </h1>
         <a href="main.html" class="text-sm text-slate-400 hover:text-white underline">Back to Home</a>
+    </div>
+
+    <div id="mappingBar"
+        class="w-full max-w-4xl mb-4 grid grid-cols-5 sm:grid-cols-10 gap-2">
     </div>
 
     <div
@@ -84,71 +108,25 @@
     </div>
 
     <script>
-        // CONFIG
-        // Change this URL after deploying to AWS
-        const API_URL = "https://p66jj3rlb5.execute-api.ap-northeast-1.amazonaws.com/api/solve";
+        const API_URL = "https://api.nankuro-assist.com/api/solve";
 
-        async function solve() {
-            const plan = localStorage.getItem('nankuro_plan') || 'free';
-            const user_id = "test_user_" + Math.floor(Math.random() * 1000);
-
-            // Dummy Board for demo
-            // ■ #1 #2
-            // #3 #1 #4
-            const board = [
-                ["■", "1", "2"],
-                ["3", "1", "4"]
-            ];
-
-            try {
-                // If we are calling the local python API directly, it might not support 'plan' in auth header easily without extra setup.
-                // However, our local_api.py doesn't check auth header for logic, it just passes user_id.
-                // But wait, our lambda_handler does check auth!
-                // Since local_api.py is just a wrapper for solver_core, it doesn't have the restriction logic of lambda_handler.
-                // To test restriction logic LOCALLY, we'd need to simulate it in JS or modify local_api.py.
-                // OR, we assume we are hitting the Lambda URL which does logic.
-
-                // For this demo, since we are likely running local_api.py (FastAPI) which returns RAW results without restriction logic (unless we added it there?), 
-                // Let's assume the API returns full results and we simulate the restriction on Client if hitting local?
-                // NO, the requirement was "Backend logic".
-                // Our local_api.py calls `solve_nankuro` directly. It DOES NOT call `apply_plan_restrictions`.
-                // So local_api.py returns FULL results always.
-
-                // To properly verify the UI handling of restrictions, we should probably update local_api.py to include restriction logic optionally,
-                // OR just accept that local testing shows full results and we trust the verify_phase2.py for logic.
-
-                // Let's send the request.
-                const response = await fetch(API_URL, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ board: board, user_id: user_id })
-                });
-
-                if (!response.ok) throw new Error("API Error");
-                const result = await response.json();
-
-                // If result is unrestricted (local API), we might want to manually restrict it here JUST FOR DEMO VISUALIZATION
-                // if we are testing the UI for Free users. 
-                // But normally the UI just renders what it gets.
-
-                renderGrid(board, result);
-
-            } catch (e) {
-                console.error(e);
-                document.getElementById('gridContainer').innerHTML = `<div class="text-red-400">Error: ${e.message}. Is the local API running?</div>`;
-            }
+        function todayJST() {
+            // JSTの日付文字列（YYYY-MM-DD）
+            const now = new Date();
+            // 端末が日本前提ならこれでOK。厳密化するならサーバ返却に寄せる。
+            const y = now.getFullYear();
+            const m = String(now.getMonth() + 1).padStart(2, '0');
+            const d = String(now.getDate()).padStart(2, '0');
+            return `${y}-${m}-${d}`;
         }
 
         function renderGrid(board, result) {
             const container = document.getElementById('gridContainer');
             container.innerHTML = '';
 
-            const solutions = result.solutions || [];
-            // Map solutions for easy lookup: key = "row,col"
+            const solutions = result.mapping || [];
             const solMap = {};
-            solutions.forEach(s => {
-                solMap[`${s.row},${s.col}`] = s;
-            });
+            solutions.forEach(s => { solMap[`${s.row},${s.col}`] = s; });
 
             const rows = board.length;
             const cols = board[0].length;
@@ -163,49 +141,129 @@
                     div.className = 'cell';
 
                     if (cellVal === '■') {
-                        div.classList.add('block');
+                    div.classList.add('block');
                     } else {
-                        div.classList.add('empty');
-                        // Helper number
-                        const spanNum = document.createElement('span');
-                        spanNum.className = 'num';
-                        spanNum.innerText = cellVal;
-                        div.appendChild(spanNum);
+                    div.classList.add('empty');
 
-                        // Solution Char
-                        const sol = solMap[`${r},${c}`];
-                        if (sol) {
-                            const spanChar = document.createElement('span');
-                            spanChar.className = 'char';
-                            spanChar.innerText = sol.char;
-                            div.appendChild(spanChar);
+                    const spanNum = document.createElement('span');
+                    spanNum.className = 'num';
+                    spanNum.innerText = cellVal;
+                    div.appendChild(spanNum);
 
-                            // Conf (if present)
-                            if (sol.conf !== undefined) {
-                                const spanConf = document.createElement('span');
-                                spanConf.className = 'conf';
-                                spanConf.innerText = (sol.conf * 100).toFixed(0) + "%";
-                                div.appendChild(spanConf);
-                                div.style.borderColor = "#22d3ee"; // Highlight confident cells
-                            }
+                    const sol = solMap[`${r},${c}`];
+                    if (sol) {
+                        const spanChar = document.createElement('span');
+                        spanChar.className = 'char';
+                        spanChar.innerText = sol.char;
+                        div.appendChild(spanChar);
+
+                        if (sol.conf !== undefined) {
+                        const spanConf = document.createElement('span');
+                        spanConf.className = 'conf';
+                        spanConf.innerText = (sol.conf * 100).toFixed(0) + "%";
+                        div.appendChild(spanConf);
                         }
+                    }
                     }
                     container.appendChild(div);
                 }
             }
 
-            // Meta Info
             const metaDiv = document.getElementById('metaInfo');
             metaDiv.innerHTML = `
-                <p>Status: <span class="text-blue-400">${result.status}</span></p>
-                <p>Puzzle ID: ${result.puzzle_id || 'N/A'}</p>
-                <p>Visible Solutions: ${solutions.length}</p>
-                ${result.meta?.limited ? '<p class="text-yellow-400">⚠ Display Limited (Free Plan)</p>' : ''}
+            <p>Status: <span class="text-blue-400">${result.status}</span></p>
+            <p>Puzzle ID: ${result.puzzle_id || 'N/A'}</p>
+            <p>Visible Solutions: ${solutions.length}</p>
+            ${result.meta?.limited ? '<p class="text-yellow-400">⚠ Display Limited (Free Plan)</p>' : ''}
             `;
         }
 
-        // Run on load
+        function renderMapping(mapping) {
+            const bar = document.getElementById("mappingBar");
+            bar.innerHTML = "";
+
+            mapping.forEach(m => {
+                const card = document.createElement("div");
+
+                let color = "border-yellow-400";
+                if (m.conf >= 0.9) color = "border-blue-400";
+                else if (m.conf >= 0.7) color = "border-green-400";
+
+                card.className = `
+                w-14 h-20 rounded-lg border ${color}
+                flex flex-col items-center justify-between p-1
+                bg-slate-800 text-white
+                `;
+
+                card.innerHTML = `
+                <div class="text-xs text-slate-400">#${m.num}</div>
+                <div class="text-2xl font-bold">${m.kanji}</div>
+                <div class="text-[10px] text-slate-400">${Math.round(m.conf*100)}%</div>
+                `;
+
+                bar.appendChild(card);
+            });
+            }
+
+
+
+        async function solve() {
+            const plan = localStorage.getItem('nankuro_plan') || 'free';
+            const board = JSON.parse(localStorage.getItem('nankuro_board') || "null");
+            if (!board) {
+            document.getElementById('gridContainer').innerHTML =
+                `<div class="text-red-400">board が見つかりません。先に main.html でOCRしてください。</div>`;
+            return;
+            }
+
+            try {
+            const response = await fetch(API_URL, {
+                method: 'POST',
+                headers: {
+                'Content-Type': 'application/json',
+                'X-Plan': plan
+                },
+                body: JSON.stringify({ board })
+            });
+
+            if (response.status === 429) {
+                const data = await response.json();
+
+                // メッセージ表示
+                document.getElementById('gridContainer').innerHTML = `
+                    <div class="text-yellow-300 text-center p-6">
+                    <p class="text-lg font-semibold">本日の上限に達しました</p>
+                    <p class="text-sm text-slate-400 mt-2">
+                        無料利用は1日5回までです。明日またお試しください。
+                    </p>
+                    </div>
+                `;
+
+                // ボタン非活性用
+                localStorage.setItem('nankuro_solve_blocked_day', todayJST());
+
+                return;
+                }
+
+
+            if (!response.ok) {
+                const text = await response.text();
+                throw new Error(`API Error ${response.status}: ${text}`);
+            }
+
+            const result = await response.json();
+            renderGrid(board, result);
+
+            } catch (e) {
+            console.error(e);
+            document.getElementById('gridContainer').innerHTML =
+                `<div class="text-red-400">Error: ${e.message}</div>`;
+            }
+        }
+
         solve();
+        renderMapping(result.mapping || []);
+
     </script>
 </body>
 

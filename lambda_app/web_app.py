@@ -6,18 +6,18 @@ import os
 import random
 import sys
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi import FastAPI, HTTPException, Request # type: ignore
+from fastapi.middleware.cors import CORSMiddleware # type: ignore
+from fastapi.responses import FileResponse, JSONResponse # type: ignore
+from fastapi.staticfiles import StaticFiles # type: ignore
 from pydantic import BaseModel
 
-import boto3
-from botocore.config import Config as BotoConfig
-from botocore.exceptions import ClientError
+import boto3 # type: ignore
+from botocore.config import Config as BotoConfig # type: ignore
+from botocore.exceptions import ClientError # type: ignore
 
 
 # ============================================================
@@ -102,70 +102,47 @@ async def on_startup():
 # ============================================================
 def get_solver_core():
     # solver_core は重い可能性があるのでここで遅延 import
-    from solver_core.solve_nankuro import solve_nankuro
-    return solve_nankuro
+    from solver import solve
+    return solve
 
 
 def get_pandas():
     import pandas as pd
     return pd
 
-
 # ============================================================
-# Business Logic (Plan restrictions)
+# Rate Limit (Phase1: in-memory)
 # ============================================================
-def select_visible_cells(solutions, user_id, puzzle_id, k=5):
-    if not user_id:
-        user_id = "anonymous"
-    if not puzzle_id:
-        puzzle_id = "unknown"
+JST = timezone(timedelta(hours=9))
 
-    seed_src = f"{user_id}:{puzzle_id}".encode()
-    seed = int(hashlib.sha256(seed_src).hexdigest(), 16)
-    rng = random.Random(seed)
+def get_client_ip(req: Request) -> str:
+    # App Runner/ALB 経由の場合は x-forwarded-for が付くことが多い
+    xff = req.headers.get("x-forwarded-for") or req.headers.get("X-Forwarded-For")
+    if xff:
+        # "client, proxy1, proxy2" の先頭がクライアントIP
+        return xff.split(",")[0].strip()
+    return req.client.host if req.client else "unknown"
 
-    idx = list(range(len(solutions)))
-    rng.shuffle(idx)
-    chosen_indices = set(idx[:k])
+class DailyIpLimiter:
+    def __init__(self, limit_per_day: int = 5):
+        self.limit = limit_per_day
+        self.counts: Dict[str, int] = {}
 
-    return [solutions[i] for i in chosen_indices]
+    def _key(self, ip: str) -> str:
+        day = datetime.now(JST).strftime("%Y-%m-%d")
+        return f"{ip}|{day}"
 
+    def check_and_increment(self, ip: str) -> Dict[str, Any]:
+        key = self._key(ip)
+        cur = self.counts.get(key, 0)
+        if cur >= self.limit:
+            return {"allowed": False, "remaining": 0}
 
-def hide_conf_for_free(result, plan):
-    if plan == "paid":
-        return result
+        cur += 1
+        self.counts[key] = cur
+        return {"allowed": True, "remaining": self.limit - cur}
 
-    r = dict(result)
-    if "solutions" in r:
-        new_solutions = []
-        for s in r["solutions"]:
-            d = dict(s)
-            d.pop("conf", None)
-            new_solutions.append(d)
-        r["solutions"] = new_solutions
-    return r
-
-
-def apply_plan_restrictions(result, plan, user_id):
-    result = hide_conf_for_free(result, plan)
-    if plan == "paid":
-        return result
-
-    if "solutions" in result and result.get("status") == "ok":
-        sols = result["solutions"]
-        pid = result.get("puzzle_id", "unknown")
-        limited_sols = select_visible_cells(sols, user_id, pid, k=5)
-
-        r = dict(result)
-        r["solutions"] = limited_sols
-        if "meta" not in r:
-            r["meta"] = {}
-        r["meta"]["limited"] = True
-        r["meta"]["visible_cells"] = len(limited_sols)
-        r["meta"]["original_count"] = len(sols)
-        return r
-
-    return result
+limiter = DailyIpLimiter(limit_per_day=5)
 
 
 # ============================================================
@@ -268,12 +245,26 @@ def board_json_to_df(board_json):
     pd = get_pandas()
     return pd.DataFrame(board_json)
 
+def limit_mapping_for_free(mapping, puzzle_id: str, k: int = 5):
+    """
+    mapping: [{'num': 1, 'kanji': '山', 'conf': 0.93}, ...]
+    """
+    seed_src = puzzle_id.encode()
+    seed = int(hashlib.sha256(seed_src).hexdigest(), 16)
+    rng = random.Random(seed)
+
+    idx = list(range(len(mapping)))
+    rng.shuffle(idx)
+    keep = set(idx[:k])
+
+    return [m for i, m in enumerate(mapping) if i in keep]
 
 # ============================================================
 # Pydantic Models
 # ============================================================
 class SolveRequest(BaseModel):
     board: List[List[Any]]
+    puzzle_id: Optional[str] = None
 
 
 class PresignRequest(BaseModel):
@@ -352,7 +343,16 @@ async def api_ocr(req: OCRRequest):
             raise HTTPException(status_code=400, detail="Provide either s3_key or image_data")
 
         board_df, meta = run_ocr(img_bytes)
-        return {"status": "ok", "board": df_to_board(board_df), "meta": meta}
+
+        puzzle_id = str(uuid.uuid4())
+
+        return {
+            "status": "ok",
+            "puzzle_id": puzzle_id,
+            "board": df_to_board(board_df),
+            "meta": meta,
+        }
+
     except HTTPException:
         raise
     except Exception as e:
@@ -363,18 +363,44 @@ async def api_ocr(req: OCRRequest):
 @app.post("/api/solve")
 async def api_solve(request: SolveRequest, req: Request):
     try:
-        user_id = "web_user"
-        plan = req.headers.get("X-Plan") or os.getenv("DEFAULT_PLAN", "paid")
+        plan = req.headers.get("X-Plan", "free")
+        puzzle_id = request.puzzle_id or "unknown"
 
-        solve_nankuro = get_solver_core()
-        board_df = board_json_to_df(request.board)
+        df = board_json_to_df(request.board)
 
-        raw_result = solve_nankuro(board_df, user_id)
-        result = apply_plan_restrictions(raw_result, plan, user_id)
+        from solver import solve
+        raw = solve(df)
+        # raw = {
+        #   solved_board: [...],
+        #   mapping: [{num, kanji, conf}, ...],
+        #   shape: [...]
+        # }
 
-        return result
+        mapping = raw.get("mapping", [])
+
+        if plan != "paid":
+            mapping = limit_mapping_for_free(mapping, puzzle_id, k=5)
+            raw["meta"] = {
+                "limited": True,
+                "visible_vars": len(mapping),
+                "total_vars": len(raw.get("mapping", [])),
+            }
+        else:
+            raw["meta"] = {
+                "limited": False,
+                "visible_vars": len(mapping),
+                "total_vars": len(mapping),
+            }
+
+        raw["mapping"] = mapping
+        raw["puzzle_id"] = puzzle_id
+
+        return raw
+
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error("Solve Error: %s", e, exc_info=True)
+        logger.error("Solve Error", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
