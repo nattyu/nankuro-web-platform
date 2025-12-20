@@ -78,6 +78,27 @@
         const API_BASE = "https://api.nankuro-assist.com"; // Relative path
         const OCR_URL = `${API_BASE}/api/ocr`;
 
+        function getOrCreateDeviceId() {
+            const KEY = "nankuro_device_id";
+            let id = localStorage.getItem(KEY);
+            if (id) return id;
+
+            // UUID生成（対応ブラウザなら crypto.randomUUID が使える）
+            if (window.crypto && window.crypto.randomUUID) {
+                id = window.crypto.randomUUID();
+            } else {
+                id = "dev-" + Math.random().toString(16).slice(2) + "-" + Date.now();
+            }
+
+
+            localStorage.setItem(KEY, id);
+            return id;
+        }
+
+        // ページ読み込み時に確定させる
+        const deviceId = getOrCreateDeviceId();
+        console.log("device_id:", deviceId);
+
         function todayJST() {
             // JSTの日付文字列（YYYY-MM-DD）
             const now = new Date();
@@ -205,7 +226,10 @@
                         try {
                             const response = await fetch(OCR_URL, {
                                 method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
+                                headers: { 
+                                    'Content-Type': 'application/json',
+                                    'X-Device-Id': deviceId,
+                                },
                                 body: JSON.stringify({
                                     image_data: base64data,
                                     filename: file.name
@@ -225,7 +249,7 @@
                         } catch (error) {
                             console.error(error);
                             alert("Error: " + error.message);
-                            solveBtn.disabled = false;
+                            applySolveLimitUI();
                             solveBtn.innerText = "Start Solving";
                         }
                     };
@@ -236,7 +260,7 @@
             } catch (e) {
                 console.error(e);
                 alert("An error occurred.");
-                solveBtn.disabled = false;
+                applySolveLimitUI();
                 solveBtn.innerText = "Start Solving";
             }
         });

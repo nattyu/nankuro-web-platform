@@ -16,7 +16,6 @@ from dataclasses import dataclass
 from typing import Dict, List
 
 import torch  # type: ignore
-from transformers import AutoTokenizer, AutoModelForMaskedLM  # type: ignore
 
 from ..config import BERT_MODEL_NAME, BERT_DEVICE
 from ..logging_utils import get_logger, get_bert_debug_logger
@@ -47,6 +46,7 @@ class BertCandidateScorer:
         """
         インスタンス生成後に、自動的にモデルとトークナイザをロードします。
         """
+        from transformers import AutoTokenizer, AutoModelForMaskedLM # type: ignore
         logger.info("[BERT] Loading model: %s", self.model_name)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
         self.model = AutoModelForMaskedLM.from_pretrained(self.model_name)

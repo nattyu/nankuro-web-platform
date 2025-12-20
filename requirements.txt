@@ -9,4 +9,8 @@ torch
 torchvision
 ultralytics
 boto3
-
+transformers
+protobuf
+sentencepiece
+fugashi
+unidic-lite

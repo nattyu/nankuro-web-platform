@@ -8,6 +8,7 @@ import sys
 import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
+from decimal import Decimal
 
 from fastapi import FastAPI, HTTPException, Request # type: ignore
 from fastapi.middleware.cors import CORSMiddleware # type: ignore
@@ -68,6 +69,39 @@ def s3_download_bytes(bucket: str, key: str) -> bytes:
     s3 = get_s3_client()
     obj = s3.get_object(Bucket=bucket, Key=key)
     return obj["Body"].read()
+
+# ============================================================
+# DynamoDB Configuration
+# ============================================================
+DDB_TABLE = os.getenv("DDB_TABLE")  # App Runner 環境変数で設定
+
+_ddb = None
+def get_ddb():
+    global _ddb
+    if not DDB_TABLE:
+        raise RuntimeError("DDB_TABLE env var is not set")
+    if _ddb is None:
+        _ddb = boto3.resource("dynamodb", region_name=AWS_REGION)
+    return _ddb.Table(DDB_TABLE)
+
+
+def _to_ddb_safe(obj: Any) -> Any:
+    """
+    DynamoDB put_item 用に、float を Decimal に変換する。
+    dict/list を再帰的に処理する。
+    """
+    if isinstance(obj, float):
+        # 文字列経由で Decimal にするのが安全（2進浮動小数の誤差を拾いにくい）
+        return Decimal(str(obj))
+    if isinstance(obj, int):
+        return obj
+    if isinstance(obj, str) or obj is None or isinstance(obj, bool):
+        return obj
+    if isinstance(obj, list):
+        return [_to_ddb_safe(x) for x in obj]
+    if isinstance(obj, dict):
+        return {k: _to_ddb_safe(v) for k, v in obj.items()}
+    return obj  # その他はそのまま（必要なら追加）
 
 
 # ============================================================
@@ -177,7 +211,7 @@ def run_ocr(img_bytes: bytes):
     img = segmentation_preprocess.preprocess_with_segmentation(img)
 
     # Resize if too large (メモリ/速度対策)
-    MAX_SIZE = 800
+    MAX_SIZE = 1980
     h, w = img.shape[:2]
     if max(h, w) > MAX_SIZE:
         scale = MAX_SIZE / max(h, w)
@@ -259,12 +293,43 @@ def limit_mapping_for_free(mapping, puzzle_id: str, k: int = 5):
 
     return [m for i, m in enumerate(mapping) if i in keep]
 
+def put_solve_cache(puzzle_id: str, device_id: str, result: dict, plan: str):
+    now = int(datetime.now(JST).timestamp())
+    ttl = now + 7 * 24 * 60 * 60  # 7日
+
+    safe_result = _to_ddb_safe(result)
+
+    table = get_ddb()
+    table.put_item(
+        Item={
+            "PK": f"PUZZLE#{puzzle_id}",
+            "SK": f"DEVICE#{device_id}",
+            "result": safe_result,
+            "created_at": now,
+            "ttl": ttl,
+            "plan": plan,
+            "version": "v1",
+        }
+    )
+
+def get_solve_cache(puzzle_id: str, device_id: str):
+    table = get_ddb()
+    resp = table.get_item(
+        Key={
+            "PK": f"PUZZLE#{puzzle_id}",
+            "SK": f"DEVICE#{device_id}",
+        }
+    )
+    return resp.get("Item")
+
+
 # ============================================================
 # Pydantic Models
 # ============================================================
 class SolveRequest(BaseModel):
     board: List[List[Any]]
     puzzle_id: Optional[str] = None
+    device_id: Optional[str] = None
 
 
 class PresignRequest(BaseModel):
@@ -365,25 +430,30 @@ async def api_solve(request: SolveRequest, req: Request):
     try:
         plan = req.headers.get("X-Plan", "free")
         puzzle_id = request.puzzle_id or "unknown"
+        device_id = req.headers.get("X-Device-Id") or request.device_id or "unknown"
 
         df = board_json_to_df(request.board)
 
+        # ===== paid: cache check first =====
+        if plan == "paid":
+            cached = get_solve_cache(puzzle_id, device_id)
+            if cached and "result" in cached:
+                return cached["result"]
+
+        # ===== solve =====
         from solver import solve
         raw = solve(df)
-        # raw = {
-        #   solved_board: [...],
-        #   mapping: [{num, kanji, conf}, ...],
-        #   shape: [...]
-        # }
 
         mapping = raw.get("mapping", [])
 
+        # ===== free restrictions =====
         if plan != "paid":
-            mapping = limit_mapping_for_free(mapping, puzzle_id, k=5)
+            mapping_limited = limit_mapping_for_free(mapping, puzzle_id, k=5)
+            raw["mapping"] = mapping_limited
             raw["meta"] = {
                 "limited": True,
-                "visible_vars": len(mapping),
-                "total_vars": len(raw.get("mapping", [])),
+                "visible_vars": len(mapping_limited),
+                "total_vars": len(mapping),
             }
         else:
             raw["meta"] = {
@@ -392,8 +462,12 @@ async def api_solve(request: SolveRequest, req: Request):
                 "total_vars": len(mapping),
             }
 
-        raw["mapping"] = mapping
         raw["puzzle_id"] = puzzle_id
+        raw["status"] = "ok"
+
+        # ===== paid: put cache =====
+        if plan == "paid":
+            put_solve_cache(puzzle_id, device_id, raw, plan)
 
         return raw
 
@@ -402,6 +476,8 @@ async def api_solve(request: SolveRequest, req: Request):
     except Exception as e:
         logger.error("Solve Error", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
 
 
 # ============================================================
